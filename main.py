@@ -24,7 +24,7 @@ app = FastAPI(title="Mahabharata & Ramayana Chat API", version="1.0.0")
 # Allow both local development and production frontend URLs
 allowed_origins = os.getenv(
     "ALLOWED_ORIGINS", 
-    "http://localhost:3000,https://mitra-frontend.vercel.app"
+    "http://localhost:3000,https://mitra-frontend.vercel.app,https://mitra-silk.vercel.app"
 ).split(",")
 
 # Strip whitespace from origins
