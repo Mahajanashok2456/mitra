@@ -54,12 +54,6 @@ function App() {
     setIsLoading(true);
 
     try {
-      // First check if backend is running
-      const isHealthy = await checkBackendHealth();
-      if (!isHealthy) {
-        throw new Error('Backend server is not running. Please start the FastAPI server on port 8000.');
-      }
-
       // Create the request body exactly as the backend expects
       const requestBody = {
         question: messageToSend // Use the captured input
