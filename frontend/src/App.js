@@ -54,9 +54,19 @@ function App() {
     setIsLoading(true);
 
     try {
+      // Format history (last 10 messages) to send to backend
+      const history = messages
+        .filter(msg => msg.text && !msg.isLoading && !msg.isError) // Filter out temp/error messages
+        .slice(-10) // Keep last 10
+        .map(msg => ({
+          role: msg.sender === 'user' ? 'user' : 'model',
+          content: msg.text
+        }));
+
       // Create the request body exactly as the backend expects
       const requestBody = {
-        question: messageToSend // Use the captured input
+        question: messageToSend, // Use the captured input
+        history: history // Add history
       };
 
       console.log('DEBUG: Sending request to backend');

@@ -33,6 +33,7 @@ app.add_middleware(
 # Request/Response models
 class ChatRequest(BaseModel):
     question: str
+    history: Optional[List[Dict[str, str]]] = []
 
 class TestRequest(BaseModel):
     question: str
@@ -118,12 +119,13 @@ def router_function(message: str) -> str:
         logger.error(f"Error in router function: {e}")
         return "general"
 
-def get_adaptive_prompt(question: str, context: List[Dict]) -> str:
+def get_adaptive_prompt(question: str, context: List[Dict], history: List[Dict[str, str]] = []) -> str:
     """
     Generates a prompt that:
     1. Analyzes user tone/intent.
     2. Uses retrieved context (Knowledge Base).
     3. Frames the answer accordingly.
+    4. RECOMMENDS responses based on conversation history.
     """
     # Detect if this is a simple factual question
     simple_question_patterns = ['who is', 'what is', 'who was', 'what was', 'define', 'tell me about']
@@ -135,10 +137,21 @@ def get_adaptive_prompt(question: str, context: List[Dict]) -> str:
     else:
         length_instruction = "**Length**: Provide 1-2 paragraphs (max 4-5 sentences total). Be thoughtful but concise."
     
+    context_str = "\n".join([f"Info: {doc.get('text', '')}" for doc in context[:4]])
+
+    # Format history for the prompt
+    history_str = ""
+    if history:
+        history_str = "PREVIOUS CONVERSATION:\n" + "\n".join(
+            [f"{msg['role'].upper()}: {msg['content']}" for msg in history[-5:]] # Keep last 5 turns
+        ) + "\n"
+    
     if not context:
         # Fallback if no context found (relying on internal knowledge)
         return f"""
         You are a wise and adaptive companion.
+        
+        {history_str}
         
         USER INPUT: "{question}"
         
@@ -148,10 +161,9 @@ def get_adaptive_prompt(question: str, context: List[Dict]) -> str:
         3. **Frame the Answer**:
            - {length_instruction}
            - **Tone Matching**: Adapt your language to the user's tone. Be empathetic if they are emotional, precise if they are factual.
+           - **Context**: Consider the previous conversation context to ensure continuity.
            - **Seamless Delivery**: Provide the wisdom/facts directly. Do not apologize for not finding text. Just give the best answer you can based on the Epics.
         """
-
-    context_str = "\n".join([f"Info: {doc.get('text', '')}" for doc in context[:4]])
 
     return f"""
 
@@ -176,6 +188,8 @@ def get_adaptive_prompt(question: str, context: List[Dict]) -> str:
     - Offer immediate, grounded presence ("I am here with you right now.").
     - Gently encourage seeking human connection or professional help, but prioritize making them feel heard and safe first. 
     - Do NOT say "it's just a test" or "karma". Pain is real.
+
+    {history_str}
 
     USER INPUT: "{question}"
 
@@ -307,14 +321,14 @@ async def chat_endpoint(request: ChatRequest):
                 ]
 
                 # Use the new unified adaptive prompt for both factual and guidance
-                prompt = get_adaptive_prompt(request.question, search_results)
+                prompt = get_adaptive_prompt(request.question, search_results, request.history)
 
                 # Get response from Gemini
                 response = gemini_model.generate_content(prompt)
                 response_data["answer"] = response.text
             else:
                 # Use the same unified prompt but with empty context (triggers fallback logic inside)
-                prompt = get_adaptive_prompt(request.question, [])
+                prompt = get_adaptive_prompt(request.question, [], request.history)
                 response = gemini_model.generate_content(prompt)
                 response_data["answer"] = response.text
         else:
