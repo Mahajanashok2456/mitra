@@ -97,18 +97,27 @@ def router_function(message: str) -> str:
             return "general"
 
         router_prompt = f"""
-        Analyze the following user message and classify it into exactly one of these categories:
-        - factual: Questions about specific events, characters, locations, or historical facts from Mahabharata or Ramayana
-        - guidance: Questions seeking wisdom, life advice, moral lessons, or spiritual guidance from the epics
-        - general: Casual conversation, greetings, or questions not specifically about the epics
+        Classify the user message into EXACTLY ONE category.
 
-        Message: "{message}"
+        Categories:
+        - factual → objective questions about Mahabharata or Ramayana (people, events, places, definitions)
+        - guidance → emotional pain, confusion, moral conflict, life advice, inner struggle
+        - general → greetings, casual talk, unrelated questions
 
-        Return only one word: factual, guidance, or general.
+        Rules:
+        - Return ONLY ONE lowercase word.
+        - No explanations.
+        - No punctuation.
+        - No extra text.
+        - If unsure, return "general".
+
+        User message:
+        "{message}"
         """
 
         response = gemini_model.generate_content(router_prompt)
-        intent = response.text.strip().lower()
+        raw_intent = response.text.strip().lower()
+        intent = ''.join(c for c in raw_intent if c.isalnum())
 
         # Ensure we return only valid intents
         if intent not in ["factual", "guidance", "general"]:
@@ -119,7 +128,7 @@ def router_function(message: str) -> str:
         logger.error(f"Error in router function: {e}")
         return "general"
 
-def get_adaptive_prompt(question: str, context: List[Dict], history: List[Dict[str, str]] = []) -> str:
+def get_adaptive_prompt(question: str, context: List[Dict], history: Optional[List[Dict[str, str]]] = None, intent: str = "guidance") -> str:
     """
     Generates a prompt that:
     1. Analyzes user tone/intent.
@@ -127,86 +136,62 @@ def get_adaptive_prompt(question: str, context: List[Dict], history: List[Dict[s
     3. Frames the answer accordingly.
     4. RECOMMENDS responses based on conversation history.
     """
-    # Detect if this is a simple factual question
-    simple_question_patterns = ['who is', 'what is', 'who was', 'what was', 'define', 'tell me about']
-    is_simple_question = any(pattern in question.lower() for pattern in simple_question_patterns)
-    
-    # Determine appropriate response length
-    if is_simple_question:
-        length_instruction = "**Length**: Keep it BRIEF. Provide 2-3 sentences maximum. Be direct and concise."
-    else:
-        length_instruction = "**Length**: Provide 1-2 paragraphs (max 4-5 sentences total). Be thoughtful but concise."
-    
     context_str = "\n".join([f"Info: {doc.get('text', '')}" for doc in context[:4]])
+
+    if history is None:
+        history = []
 
     # Format history for the prompt
     history_str = ""
     if history:
-        history_str = "PREVIOUS CONVERSATION:\n" + "\n".join(
-            [f"{msg['role'].upper()}: {msg['content']}" for msg in history[-5:]] # Keep last 5 turns
-        ) + "\n"
-    
-    if not context:
-        # Fallback if no context found (relying on internal knowledge)
-        return f"""
-        You are a wise and adaptive companion.
-        
-        {history_str}
-        
-        USER INPUT: "{question}"
-        
-        ### INSTRUCTIONS:
-        1. **Analyze Tone & Intent**: Determine the user's emotional state and underlying need.
-        2. **Internal Knowledge**: Since no specific text was retrieved, access your internal knowledge of the Mahabharata and Ramayana.
-        3. **Frame the Answer**:
-           - {length_instruction}
-           - **Tone Matching**: Adapt your language to the user's tone. Be empathetic if they are emotional, precise if they are factual.
-           - **Context**: Consider the previous conversation context to ensure continuity.
-           - **Seamless Delivery**: Provide the wisdom/facts directly. Do not apologize for not finding text. Just give the best answer you can based on the Epics.
-        """
+        history_str = "\n".join(
+            [f"{msg['role'].upper()}: {msg['content']}" for msg in history[-2:]] # Cost opt: Keep last 2 turns
+        )
 
-    return f"""
+    # FACTUAL INTENT - EXPERT PERSONA
+    if intent == "factual":
+        return f"""Answer the question with factual accuracy.
 
-    You are a compassionate, grounded, therapist-style guide whose wisdom is inspired by the Ramayanam and the Mahabharat.
-    You do NOT act as a religious preacher.
-    You act as a calm, emotionally intelligent counselor who uses ancient stories as psychological mirrors for modern problems.
+Rules:
+- 2–3 sentences ONLY.
+- Stop immediately after the answer.
+- Do not add background, interpretation, or philosophy.
 
-    🧠 CORE BEHAVIOR RULES (NON-NEGOTIABLE)
+User question:
+"{question}"
 
-    1. **Emotion First, Advice Second**: Always acknowledge the user’s emotion before giving guidance. Never jump straight to solutions.
-    2. **Story → Insight → Action**:
-       - If helpful, reference one relevant incident or character indirectly (no heavy scripture dumping).
-       - Extract the human lesson, not religious doctrine.
-       - End with practical, modern guidance the user can act on.
-    3. **No Moral Policing**: Do NOT shame, judge, threaten karma, or say “this is right/wrong”. The user is never “bad” — only conflicted, hurt, or unaware.
-    4. **No God Roleplay**: Do NOT claim divine authority. Speak as a wise human guide, not a deity.
-    5. **Language Style**: Calm, warm, grounded, slightly poetic but simple. No modern slang. No corporate therapy jargon. Speak like a composed elder who understands pain.
+Context:
+{context_str}
+"""
 
-    ⚠️ **CRITICAL SAFETY OVERRIDE**: 
-    If the user expresses hopelessness, suicidal thoughts, or extreme distress (e.g., "I want to die", "kill myself"), do NOT offer philosophical debate or karma explanations.
-    - Validate their pain deeply ("I hear how heavy your heart is...").
-    - Offer immediate, grounded presence ("I am here with you right now.").
-    - Gently encourage seeking human connection or professional help, but prioritize making them feel heard and safe first. 
-    - Do NOT say "it's just a test" or "karma". Pain is real.
+    # GUIDANCE INTENT (DEFAULT) - THERAPIST PERSONA
+    return f"""Respond with emotional clarity and restraint.
 
-    {history_str}
+Rules:
+- Maximum 4–5 sentences.
+- No repetition.
+- No lecturing.
+- Emotional safety > sounding wise.
 
-    USER INPUT: "{question}"
+If there is any conflict between:
+- speed and safety
+- verbosity and clarity
+- wisdom and emotional grounding
 
-    ### INSTRUCTIONS:
-    1. **Analyze Tone & Intent**: Understand what the user is really asking and how they are feeling.
-    2. **Use Knowledge Base (Optional)**: If the following knowledge base has relevant stories, use them as metaphors. If not, rely on your internal wisdom of the Epics.
-       - KNOWLEDGE BASE:
-       {context_str}
-    3. **Frame the Answer**:
-       - **Structure**: 
-         1. **Emotional Validation**: Name the feeling. Make them feel seen.
-         2. **Reflective Insight**: A short story/analogy from the Epics (if relevant) OR a psychological insight.
-         3. **Grounded Guidance**: Clear, realistic advice for today.
-         4. **Gentle Closing**: One calming line.
-       - **Length**: {length_instruction}
-       - **Tone**: If the user is sad, be a comforting friend. If conflicted, be a steady guide.
-    """
+Always choose:
+- safety
+- clarity
+- restraint
+
+Previous conversation:
+{history_str}
+
+User input:
+"{question}"
+
+Context:
+{context_str}
+"""
 
 def perform_vector_search(query: str, limit: int = 5) -> List[Dict]:
     """Perform vector search on MongoDB"""
@@ -222,7 +207,7 @@ def perform_vector_search(query: str, limit: int = 5) -> List[Dict]:
         result = genai.embed_content(
             model=EMBEDDING_MODEL_NAME,
             content=query,
-            task_type="retrieval_document"
+            task_type="retrieval_query"
         )
 
         query_embedding = result['embedding']
@@ -277,6 +262,26 @@ async def chat_endpoint(request: ChatRequest):
                 source_evidence=[]
             )
 
+        # CRISIS DETECTION
+        crisis_keywords = [
+            "suicide", "kill myself", "want to die", "end my life",
+            "hurt myself", "no reason to live", "better off dead",
+            "ending it all", "don't want to live"
+        ]
+        
+        if any(keyword in request.question.lower() for keyword in crisis_keywords):
+            logger.warning("Crisis keywords detected. Bypassing LLM.")
+            return ChatResponse(
+                answer="""I hear how heavy your heart is right now, and I want you to know that you are not alone in this pain.
+
+Please reach out to a human voice who can truly support you:
+📞 India: 9820466726 (AASRA) or 14416 (KIRAN Mental Health Helpline)
+
+Your life has value, even in this dark moment. Please call them.""",
+                intent="guidance",
+                source_evidence=[]
+            )
+
         # Classify intent
         intent = router_function(request.question)
         logger.info(f"Classified intent: {intent}")
@@ -288,26 +293,43 @@ async def chat_endpoint(request: ChatRequest):
         }
 
         if intent in ["factual", "guidance"]:
-            # Query expansion for better context retrieval
             expanded_query = request.question
-            try:
-                expansion_prompt = f"""
-                Analyze the following user question and generate 2-3 keywords or short phrases that represent the core emotional themes, moral dilemmas, or epic concepts from Mahabharata and Ramayana that are relevant to the user's situation.
+            
+            # COST OPT: Only expand query for guidance, factual usually doesn't need it
+            if intent == "guidance":
+                try:
+                    expansion_prompt = f"""
+                    Extract 2–3 short keywords or phrases that capture the CORE theme of the user’s question,
+                    focused on emotional states, moral dilemmas, or epic concepts from Ramayanam or Mahabharat.
 
-                User question: "{request.question}"
+                    Rules:
+                    - Output ONLY comma-separated keywords.
+                    - No sentences.
+                    - No explanations.
+                    - If nothing fits, return an empty response.
 
-                Provide only the keywords or phrases, separated by commas. Examples: betrayal, dharma dilemma, grief, karma, resilience.
-                """
-                expansion_response = gemini_model.generate_content(expansion_prompt)
-                themes = [theme.strip() for theme in expansion_response.text.strip().split(',') if theme.strip()]
-                if themes:
-                    expanded_query = request.question + " " + " ".join(themes)
-                    logger.info(f"Expanded query: {expanded_query}")
-            except Exception as e:
-                logger.warning(f"Query expansion failed: {e}. Using original question.")
+                    User question:
+                    "{request.question}"
 
-            # Perform vector search for context using expanded query
-            search_results = perform_vector_search(expanded_query)
+                    Examples:
+                    betrayal, dharma dilemma, grief
+                    identity conflict, exile, resilience
+                    """
+                    expansion_response = gemini_model.generate_content(expansion_prompt)
+                    themes = [theme.strip() for theme in expansion_response.text.strip().split(',') if theme.strip()]
+                    if themes:
+                        expanded_query = request.question + " " + " ".join(themes)
+                        logger.info(f"Expanded query: {expanded_query}")
+                except Exception as e:
+                    logger.warning(f"Query expansion failed: {e}. Using original question.")
+
+            # COST OPT: Skip vector search for short factual questions to save latency
+            if intent == "factual" and len(request.question) < 60:
+                logger.info("Skipping vector search for short query")
+                search_results = []
+            else:
+                # Perform vector search for context using expanded query
+                search_results = perform_vector_search(expanded_query)
 
             if search_results:
                 response_data["source_evidence"] = [
@@ -321,27 +343,30 @@ async def chat_endpoint(request: ChatRequest):
                 ]
 
                 # Use the new unified adaptive prompt for both factual and guidance
-                prompt = get_adaptive_prompt(request.question, search_results, request.history)
+                prompt = get_adaptive_prompt(request.question, search_results, request.history, intent)
 
                 # Get response from Gemini
-                response = gemini_model.generate_content(prompt)
+                # Cost optimization: enforce max tokens
+                response = gemini_model.generate_content(prompt, generation_config={"max_output_tokens": 250})
                 response_data["answer"] = response.text
             else:
                 # Use the same unified prompt but with empty context (triggers fallback logic inside)
-                prompt = get_adaptive_prompt(request.question, [], request.history)
+                prompt = get_adaptive_prompt(request.question, [], request.history, intent)
                 response = gemini_model.generate_content(prompt)
                 response_data["answer"] = response.text
         else:
             # General conversation
             general_prompt = f"""
-            You are a wise, empathetic, and supportive companion.
-            
-            The user message is: "{request.question}"
+            Respond naturally and briefly.
 
-            Please respond in a warm, friendly, and grounded manner.
-            Do not mention that you are an AI or that you rely on the Mahabharata or Ramayana.
-            Simply offer your presence, your ear, and a willingness to discuss life, challenges, or wisdom.
-            If the user says "Hello" or greets you, welcome them delicately and ask how they are feeling today.
+            Rules:
+            - Friendly and human.
+            - No advice unless asked.
+            - No therapy tone.
+            - No epic references.
+
+            User message:
+            "{request.question}"
             """
 
             response = gemini_model.generate_content(general_prompt)
@@ -377,7 +402,10 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {"status": "healthy", "mongodb": "connected", "gemini": "initialized"}
+    mongo_status = "connected" if mongodb_client is not None else "disconnected"
+    gemini_status = "initialized" if gemini_model is not None else "failed"
+    status = "healthy" if mongo_status == "connected" and gemini_status == "initialized" else "unhealthy"
+    return {"status": status, "mongodb": mongo_status, "gemini": gemini_status}
 
 @app.post("/test")
 async def simple_test_endpoint(request: TestRequest):
